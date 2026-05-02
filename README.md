@@ -224,7 +224,7 @@ drs-frontend   ─ Cloud Run (포트 8080, nginx + Vite 빌드)
 ```bash
 # gcloud 로그인 및 프로젝트 설정
 gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
+gcloud config set project drs-recommend-main
 
 # 필요 API 활성화
 gcloud services enable \
@@ -242,12 +242,12 @@ gcloud artifacts repositories create drs-images \
 gcloud auth configure-docker asia-northeast3-docker.pkg.dev
 
 # Cloud Build 서비스 계정에 Cloud Run 배포 권한 부여
-PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT_ID --format='value(projectNumber)')
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+# PROJECT_NUMBER: 960488973669
+gcloud projects add-iam-policy-binding drs-recommend-main \
+  --member="serviceAccount:960488973669@cloudbuild.gserviceaccount.com" \
   --role="roles/run.admin"
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding drs-recommend-main \
+  --member="serviceAccount:960488973669@cloudbuild.gserviceaccount.com" \
   --role="roles/iam.serviceAccountUser"
 ```
 
@@ -258,7 +258,7 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
 gcloud builds submit . \
   --config=cloudbuild.yaml \
   --substitutions=_REGION=asia-northeast3,_REPO=drs-images,_TAG=latest \
-  --project=YOUR_PROJECT_ID
+  --project=drs-recommend-main
 ```
 
 Cloud Build가 다음 작업을 자동으로 수행합니다:
@@ -277,7 +277,7 @@ gcloud builds triggers create github \
   --branch-pattern='^main$' \
   --build-config=cloudbuild.yaml \
   --substitutions=_REGION=asia-northeast3,_REPO=drs-images \
-  --project=YOUR_PROJECT_ID
+  --project=drs-recommend-main
 ```
 
 ### 4. 배포된 서비스 URL 확인
