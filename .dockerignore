@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.claude
+__pycache__
+*.py[cod]
+*.pyo
+.env
+backend/data/cache_*.json
+*.log
+.DS_Store

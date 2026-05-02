@@ -187,7 +187,7 @@ LOG_LEVEL=INFO
 
 ---
 
-## 빌드 및 배포
+## 로컬 빌드
 
 ```bash
 # 프로덕션 빌드 생성
@@ -198,6 +198,144 @@ npm run preview
 ```
 
 빌드 결과물은 `dist/` 디렉토리에 생성됩니다. `index.html`, `recommend.html`, `search.html` 모두 별도의 진입점으로 빌드됩니다.
+
+---
+
+## Google Cloud 배포 (Cloud Run + Docker)
+
+3개 서비스를 Cloud Run 무료 티어 내에서 Docker 컨테이너로 배포합니다.
+
+```
+drs-recommend  ─ Cloud Run (포트 8000, 추천 API)
+drs-search     ─ Cloud Run (포트 8080, 차트 검색 API)
+drs-frontend   ─ Cloud Run (포트 8080, nginx + Vite 빌드)
+```
+
+### 사전 요구사항
+
+| 항목 | 설명 |
+|------|------|
+| gcloud CLI | https://cloud.google.com/sdk/docs/install |
+| Docker Desktop | 로컬 이미지 빌드 시 필요 (Cloud Build 사용 시 불필요) |
+| GCP 프로젝트 | 결제 계정 연결 필수 (무료 티어 사용 가능) |
+
+### 1. 최초 GCP 환경 설정 (1회만 수행)
+
+```bash
+# gcloud 로그인 및 프로젝트 설정
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+
+# 필요 API 활성화
+gcloud services enable \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com
+
+# Artifact Registry Docker 저장소 생성 (asia-northeast3 = 서울)
+gcloud artifacts repositories create drs-images \
+  --repository-format=docker \
+  --location=asia-northeast3 \
+  --description="DRS Docker images"
+
+# Docker 인증 설정
+gcloud auth configure-docker asia-northeast3-docker.pkg.dev
+
+# Cloud Build 서비스 계정에 Cloud Run 배포 권한 부여
+PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT_ID --format='value(projectNumber)')
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  --role="roles/run.admin"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+### 2. Cloud Build로 빌드 & 배포 (CI/CD)
+
+```bash
+# 저장소 루트에서 실행
+gcloud builds submit . \
+  --config=cloudbuild.yaml \
+  --substitutions=_REGION=asia-northeast3,_REPO=drs-images,_TAG=latest \
+  --project=YOUR_PROJECT_ID
+```
+
+Cloud Build가 다음 작업을 자동으로 수행합니다:
+1. 3개 Docker 이미지 병렬 빌드
+2. Artifact Registry에 이미지 푸시
+3. `drs-recommend`, `drs-search` 백엔드 서비스 배포
+4. 백엔드 URL을 환경변수로 주입하여 `drs-frontend` 배포
+
+### 3. GitHub 연동 자동 배포 트리거 설정 (선택)
+
+```bash
+# main 브랜치 push 시 자동 배포 트리거 생성
+gcloud builds triggers create github \
+  --repo-name=DRS_Recommend-main \
+  --repo-owner=aircho111 \
+  --branch-pattern='^main$' \
+  --build-config=cloudbuild.yaml \
+  --substitutions=_REGION=asia-northeast3,_REPO=drs-images \
+  --project=YOUR_PROJECT_ID
+```
+
+### 4. 배포된 서비스 URL 확인
+
+```bash
+gcloud run services list --region=asia-northeast3 --format="table(metadata.name,status.url)"
+```
+
+| 서비스 | 접속 URL |
+|--------|----------|
+| drs-frontend | `https://drs-frontend-xxxx-an.a.run.app` |
+| drs-recommend | `https://drs-recommend-xxxx-an.a.run.app` |
+| drs-search | `https://drs-search-xxxx-an.a.run.app` |
+
+프론트엔드 URL로 접속하면 백엔드 API URL이 자동으로 주입되어 동작합니다.
+
+### 5. 차트 검색 초기 데이터 수집
+
+최초 배포 후 검색 데이터를 수집해야 합니다:
+
+```bash
+SEARCH_URL=$(gcloud run services describe drs-search \
+  --region=asia-northeast3 --format='value(status.url)')
+
+curl -X POST "${SEARCH_URL}/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{"days": 365}'
+```
+
+> 약 1,000개 종목 데이터 다운로드로 수 분 소요됩니다.
+
+### GCP 무료 티어 한도
+
+| 항목 | 무료 한도 |
+|------|-----------|
+| Cloud Run 요청 | 2,000,000 req/월 |
+| Cloud Run 컴퓨팅 | 360,000 GB-초/월 + 180,000 vCPU-초/월 |
+| Artifact Registry | 0.5 GB 스토리지 무료 |
+| Cloud Build | 120 빌드-분/일 무료 |
+
+> `min-instances=0` 설정으로 미사용 시 인스턴스가 0으로 스케일다운되어 비용이 발생하지 않습니다. 단, Cold Start로 인해 첫 요청 응답에 수십 초가 걸릴 수 있습니다.
+
+### 로컬 Docker 테스트
+
+```bash
+# 이미지 빌드
+docker build -f Dockerfile.recommend -t drs-recommend .
+docker build -f Dockerfile.search -t drs-search .
+docker build -f Dockerfile.frontend -t drs-frontend .
+
+# 컨테이너 실행
+docker run -p 8000:8000 drs-recommend
+docker run -p 8080:8080 drs-search
+docker run -p 3000:8080 \
+  -e RECOMMEND_API_URL=http://localhost:8000 \
+  -e SEARCH_API_URL=http://localhost:8080 \
+  drs-frontend
+```
 
 ---
 
@@ -213,3 +351,6 @@ npm run preview
 | 유사도 검색 | 코사인 유사도 + DTW + Pearson |
 | 데이터 저장 | Parquet (기본) / PostgreSQL + pgvector (선택) |
 | 설정 관리 | pydantic-settings (.env 지원) |
+| 컨테이너화 | Docker (multi-stage build) |
+| 클라우드 배포 | Google Cloud Run + Artifact Registry |
+| CI/CD | Google Cloud Build |

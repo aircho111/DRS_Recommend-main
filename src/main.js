@@ -154,7 +154,8 @@ async function fetchRecommendations(mode = 'auto') {
   }
 
   try {
-    const response = await fetch(`http://localhost:8000/api/recommend?date=${mode}`);
+    const baseUrl = (window.__DRS_CONFIG__?.RECOMMEND_API) ?? 'http://localhost:8000';
+    const response = await fetch(`${baseUrl}/api/recommend?date=${mode}`);
     const result = await response.json();
     if(result.status === 'success' && result.data.length > 0) {
       top10Stocks = result.data;

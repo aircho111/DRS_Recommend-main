@@ -1,0 +1,157 @@
+################################################################################
+# DRS — Cloud Build CI/CD Pipeline
+#
+# Substitution variables (set in Cloud Build trigger or --substitutions flag):
+#   _REGION        : e.g. asia-northeast3
+#   _PROJECT_ID    : GCP project ID
+#   _REPO          : Artifact Registry repo name (e.g. drs-images)
+#   _TAG           : image tag (default: $COMMIT_SHA)
+################################################################################
+
+substitutions:
+  _REGION: asia-northeast3
+  _REPO: drs-images
+  _TAG: $COMMIT_SHA
+
+steps:
+  # ── Build images (parallel) ────────────────────────────────────────────────
+  - id: build-recommend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.recommend
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-recommend:${_TAG}
+      - .
+    waitFor: ["-"]
+
+  - id: build-search
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.search
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-search:${_TAG}
+      - .
+    waitFor: ["-"]
+
+  - id: build-frontend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.frontend
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-frontend:${_TAG}
+      - .
+    waitFor: ["-"]
+
+  # ── Push images (parallel, after builds) ──────────────────────────────────
+  - id: push-recommend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-recommend:${_TAG}
+    waitFor: [build-recommend]
+
+  - id: push-search
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-search:${_TAG}
+    waitFor: [build-search]
+
+  - id: push-frontend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-frontend:${_TAG}
+    waitFor: [build-frontend]
+
+  # ── Deploy backends first (parallel) ──────────────────────────────────────
+  - id: deploy-recommend
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - drs-recommend
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-recommend:${_TAG}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8000
+      - --memory=2Gi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=2
+      - --timeout=300
+    waitFor: [push-recommend]
+
+  - id: deploy-search
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - drs-search
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-search:${_TAG}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --memory=1Gi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=2
+      - --timeout=300
+    waitFor: [push-search]
+
+  # ── Capture backend URLs ───────────────────────────────────────────────────
+  - id: get-backend-urls
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        RECOMMEND_URL=$(gcloud run services describe drs-recommend \
+          --region=${_REGION} --format='value(status.url)')
+        SEARCH_URL=$(gcloud run services describe drs-search \
+          --region=${_REGION} --format='value(status.url)')
+        echo "RECOMMEND_URL=$RECOMMEND_URL"
+        echo "SEARCH_URL=$SEARCH_URL"
+        echo "$RECOMMEND_URL" > /workspace/recommend_url.txt
+        echo "$SEARCH_URL" > /workspace/search_url.txt
+    waitFor: [deploy-recommend, deploy-search]
+
+  # ── Deploy frontend with backend URLs injected ────────────────────────────
+  - id: deploy-frontend
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        RECOMMEND_URL=$(cat /workspace/recommend_url.txt)
+        SEARCH_URL=$(cat /workspace/search_url.txt)
+        gcloud run deploy drs-frontend \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-frontend:${_TAG} \
+          --region=${_REGION} \
+          --platform=managed \
+          --allow-unauthenticated \
+          --port=8080 \
+          --memory=256Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=2 \
+          --set-env-vars="RECOMMEND_API_URL=$RECOMMEND_URL,SEARCH_API_URL=$SEARCH_URL"
+    waitFor: [push-frontend, get-backend-urls]
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-recommend:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-search:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-frontend:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

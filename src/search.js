@@ -1,5 +1,4 @@
-// API URL: 환경에 따라 자동 설정
-const API = "http://localhost:8080";
+const API = (window.__DRS_CONFIG__?.SEARCH_API) ?? "http://localhost:8080";
 const c = document.getElementById("c");
 const ctx = c.getContext("2d");
 let drawing=false, pts=[];
