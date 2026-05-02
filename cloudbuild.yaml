@@ -110,20 +110,22 @@ steps:
     waitFor: [push-search]
 
   # ── Capture backend URLs ───────────────────────────────────────────────────
+  # Note: $$ escapes bash variables so Cloud Build doesn't treat them as
+  # substitution variables (Cloud Build substitutions must start with _)
   - id: get-backend-urls
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
       - -c
       - |
-        RECOMMEND_URL=$(gcloud run services describe drs-recommend \
+        RECOMMEND_URL=$$(gcloud run services describe drs-recommend \
           --region=${_REGION} --format='value(status.url)')
-        SEARCH_URL=$(gcloud run services describe drs-search \
+        SEARCH_URL=$$(gcloud run services describe drs-search \
           --region=${_REGION} --format='value(status.url)')
-        echo "RECOMMEND_URL=$RECOMMEND_URL"
-        echo "SEARCH_URL=$SEARCH_URL"
-        echo "$RECOMMEND_URL" > /workspace/recommend_url.txt
-        echo "$SEARCH_URL" > /workspace/search_url.txt
+        echo "RECOMMEND_URL=$$RECOMMEND_URL"
+        echo "SEARCH_URL=$$SEARCH_URL"
+        echo "$$RECOMMEND_URL" > /workspace/recommend_url.txt
+        echo "$$SEARCH_URL" > /workspace/search_url.txt
     waitFor: [deploy-recommend, deploy-search]
 
   # ── Deploy frontend with backend URLs injected ────────────────────────────
@@ -133,8 +135,8 @@ steps:
     args:
       - -c
       - |
-        RECOMMEND_URL=$(cat /workspace/recommend_url.txt)
-        SEARCH_URL=$(cat /workspace/search_url.txt)
+        RECOMMEND_URL=$$(cat /workspace/recommend_url.txt)
+        SEARCH_URL=$$(cat /workspace/search_url.txt)
         gcloud run deploy drs-frontend \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/drs-frontend:${_TAG} \
           --region=${_REGION} \
@@ -145,7 +147,7 @@ steps:
           --cpu=1 \
           --min-instances=0 \
           --max-instances=2 \
-          --set-env-vars="RECOMMEND_API_URL=$RECOMMEND_URL,SEARCH_API_URL=$SEARCH_URL"
+          --set-env-vars="RECOMMEND_API_URL=$$RECOMMEND_URL,SEARCH_API_URL=$$SEARCH_URL"
     waitFor: [push-frontend, get-backend-urls]
 
 images:
